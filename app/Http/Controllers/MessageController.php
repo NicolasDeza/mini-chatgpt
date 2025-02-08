@@ -75,6 +75,7 @@ class MessageController extends Controller
                 messages: [['role' => 'user', 'content' => $titlePrompt]],
                 model: $request->model ?? $conversation->model
             );
+
             $title = trim(str_replace(['"', "'", '.', '!', '?'], '', $title));
             $conversation->update([
                 'title' => $title,
