@@ -1,175 +1,271 @@
 <script setup>
-import { ref, watch, nextTick, computed } from "vue";
-import { useForm, usePage, Link, router } from "@inertiajs/vue3";
+import { ref, watch, nextTick, computed, toRaw } from "vue";
+import { useForm, usePage } from "@inertiajs/vue3";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
 import "highlight.js/styles/github-dark.css";
 
-// ✅ Récupération des props passées par Inertia
+// Initialisation de l'état avec une meilleure gestion des valeurs par défaut
 const page = usePage();
-const models = computed(() => page.props.models || []);
-const selectedModel = ref(page.props.selectedModel);
-const flashMessage = ref(page.props.flash?.message || "");
-const flashError = ref(page.props.flash?.error || "");
+
+// Remplacer computed par une ref réactive
+const conversations = ref(
+    Array.isArray(page.props.conversations) ? page.props.conversations : []
+);
+
+// Conversion des props en données réactives avec vérification
+const models = computed(() => {
+    const modelData = toRaw(page.props.models);
+    return Array.isArray(modelData) ? modelData : [];
+});
+
+const selectedModel = ref(page.props.selectedModel || null);
+
+const messages = ref([]);
 const loading = ref(false);
-const conversations = ref(page.props.conversations || []);
-const selectedConversation = ref(page.props.selectedConversation || null);
-const messages = ref(page.props.messages || []);
+const selectedConversation = ref(null);
 const currentConversationId = ref(null);
 const editingTitle = ref(null);
 const newTitle = ref("");
+const flashMessage = ref("");
+const flashError = ref("");
 
-console.log(" Models chargés :", models.value);
-console.log(" Conversations chargées :", conversations.value);
-console.log("Messages chargés :", messages.value);
+// Debug logs
+console.log("Models:", toRaw(models.value));
+console.log("Conversations:", toRaw(conversations.value));
+console.log("Messages:", toRaw(messages.value));
 
-// ✅ Initialisation de Markdown avec Highlight.js
+// Initialisation de Markdown
 const md = new MarkdownIt({
     highlight: function (str, lang) {
         if (lang && hljs.getLanguage(lang)) {
             try {
-                return `<pre class="hljs"><code>${
-                    hljs.highlight(str, { language: lang }).value
-                }</code></pre>`;
-            } catch (__) {}
+                return hljs.highlight(str, { language: lang }).value;
+            } catch (__) {
+                return "";
+            }
         }
-        return `<pre class="hljs"><code>${md.utils.escapeHtml(
-            str
-        )}</code></pre>`;
+        return "";
     },
+    html: true,
+    breaks: true,
 });
 
-// ✅ Sélectionner une conversation
-const selectConversation = (conversation) => {
-    if (currentConversationId.value === conversation.id) return;
+// Formulaire avec valeur par défaut sécurisée
+const form = useForm({
+    message: "",
+    model: selectedModel.value || "",
+    conversation_id: null,
+});
 
-    loading.value = true;
-    currentConversationId.value = conversation.id;
-    selectedConversation.value = conversation;
+// Gestion des conversations
+const selectConversation = async (conversation) => {
+    if (!conversation?.id || currentConversationId.value === conversation.id)
+        return;
 
-    axios
-        .get(route("chat.show", conversation.id))
-        .then((response) => {
+    try {
+        loading.value = true;
+        currentConversationId.value = conversation.id;
+        selectedConversation.value = conversation;
+
+        // Mettre à jour le modèle sélectionné avec celui de la conversation
+        if (conversation.model) {
+            form.model = conversation.model;
+        }
+
+        // Charger les messages de la conversation
+        const response = await axios.get(
+            route("messages.index", conversation.id)
+        );
+        if (response?.data?.messages) {
             messages.value = response.data.messages;
-            scrollToBottom();
-        })
-        .catch((error) => {
-            console.error("Erreur lors du chargement des messages:", error);
-        })
-        .finally(() => {
-            loading.value = false;
-        });
+            await scrollToBottom();
+        }
+    } catch (error) {
+        console.error("Erreur lors du chargement des messages:", error);
+        flashError.value = "Erreur lors du chargement des messages";
+    } finally {
+        loading.value = false;
+    }
 };
 
-// Ajouter cette fonction pour gérer les titres
-const updateConversationTitle = (conversation) => {
-    if (!newTitle.value.trim()) {
-        newTitle.value = conversation.title;
+const createConversation = async () => {
+    if (loading.value) return;
+
+    try {
+        loading.value = true;
+        const response = await axios.post(route("chat.store"));
+
+        if (response?.data?.conversations) {
+            conversations.value = response.data.conversations;
+            if (response.data.conversation) {
+                await selectConversation(response.data.conversation);
+            }
+        }
+    } catch (error) {
+        console.error("Erreur lors de la création de la conversation:", error);
+        flashError.value = "Erreur lors de la création de la conversation";
+    } finally {
+        loading.value = false;
+    }
+};
+
+const updateConversationTitle = async (conversation) => {
+    if (!conversation?.id || !newTitle.value?.trim()) {
+        newTitle.value = conversation?.title || "";
         editingTitle.value = null;
         return;
     }
 
-    axios
-        .post(route("chat.updateTitle", conversation.id), {
-            title: newTitle.value,
-        })
-        .then((response) => {
-            const updatedConv = response.data.conversation;
+    try {
+        const response = await axios.post(
+            route("chat.updateTitle", conversation.id),
+            {
+                title: newTitle.value.trim(),
+            }
+        );
+
+        if (response?.data?.conversation) {
             const index = conversations.value.findIndex(
-                (c) => c.id === updatedConv.id
+                (c) => c.id === response.data.conversation.id
             );
             if (index !== -1) {
-                conversations.value[index] = updatedConv;
+                conversations.value[index] = response.data.conversation;
             }
-            editingTitle.value = null;
-        })
-        .catch((error) => {
-            console.error("Erreur lors de la mise à jour du titre:", error);
-        });
-};
-
-const createConversation = () => {
-    loading.value = true;
-
-    axios
-        .post(route("chat.store"))
-        .then((response) => {
-            conversations.value = response.data.conversations;
-            selectConversation(response.data.conversation);
-            messages.value = [];
-        })
-        .catch((error) => {
-            console.error(
-                "Erreur lors de la création de la conversation:",
-                error
-            );
-        })
-        .finally(() => {
-            loading.value = false;
-        });
-};
-
-// ✅ Scroll automatique du chat
-const scrollToBottom = () => {
-    nextTick(() => {
-        const chatContainer = document.querySelector(".chat-container");
-        if (chatContainer) {
-            chatContainer.scrollTop = chatContainer.scrollHeight;
         }
-    });
+    } catch (error) {
+        console.error("Erreur lors de la mise à jour du titre:", error);
+        flashError.value = "Erreur lors de la mise à jour du titre";
+    } finally {
+        editingTitle.value = null;
+    }
 };
 
-// ✅ Formulaire d'envoi de message
-const form = useForm({
-    message: "",
-    model: selectedModel.value,
-    conversation_id: null,
-});
+// Gestion des messages
+const sendMessage = async () => {
+    if (
+        !form.message.trim() ||
+        !selectedConversation.value?.id ||
+        loading.value
+    )
+        return;
 
-// ✅ Envoi du message à l'IA
-const sendMessage = () => {
-    if (!form.message.trim()) return;
+    const tempMessage = form.message.trim();
+    try {
+        loading.value = true;
+        form.conversation_id = selectedConversation.value.id;
 
-    form.conversation_id = selectedConversation.value?.id;
+        messages.value.push({ role: "user", content: tempMessage });
+        messages.value.push({
+            role: "assistant",
+            content: "L'IA réfléchit...",
+        });
+        await scrollToBottom();
 
-    messages.value.push({ role: "user", content: form.message });
-    messages.value.push({ role: "assistant", content: "L'IA réfléchit..." });
-
-    loading.value = true;
-
-    form.post(route("ask.post"), {
-        preserveScroll: true,
-        preserveState: true,
-        onSuccess: () => {
-            messages.value = messages.value.filter(
-                (msg) => msg.content !== "L'IA réfléchit..."
-            );
-
-            if (page.props.flash?.message) {
-                messages.value.push({
-                    role: "assistant",
-                    content: page.props.flash.message,
-                });
+        const response = await axios.post(
+            route("messages.store", selectedConversation.value.id),
+            {
+                message: tempMessage,
+                model: form.model,
             }
+        );
 
-            flashMessage.value = page.props.flash?.message || "";
-            flashError.value = page.props.flash?.error || "";
-            form.reset("message");
-            scrollToBottom();
-        },
-        onError: () => {
-            messages.value = messages.value.filter(
-                (msg) => msg.content !== "L'IA réfléchit..."
+        if (response.data.messages) {
+            messages.value = response.data.messages;
+        }
+
+        // Mise à jour de la conversation (avec le titre généré) dans la liste et la sélection
+        if (response.data.conversation) {
+            const updatedConversation = response.data.conversation;
+            const index = conversations.value.findIndex(
+                (c) => c.id === updatedConversation.id
             );
-            flashError.value = "Une erreur est survenue lors de l'envoi.";
-        },
-        onFinish: () => {
-            loading.value = false;
-        },
+            if (index !== -1) {
+                conversations.value[index] = updatedConversation;
+            }
+            if (selectedConversation.value?.id === updatedConversation.id) {
+                selectedConversation.value = updatedConversation;
+            }
+            // Optionnel : réordonner les conversations par date d'activité
+            conversations.value.sort(
+                (a, b) => new Date(b.last_activity) - new Date(a.last_activity)
+            );
+        }
+
+        // Mise à jour de toute la liste des conversations
+        if (response.data.conversations) {
+            conversations.value = response.data.conversations;
+        }
+
+        form.reset("message");
+        await scrollToBottom();
+    } catch (error) {
+        // ...gestion d'erreur existante...
+        messages.value = messages.value.filter(
+            (msg) =>
+                msg.content !== "L'IA réfléchit..." &&
+                msg.content !== tempMessage
+        );
+        flashError.value = "Une erreur est survenue lors de l'envoi du message";
+    } finally {
+        loading.value = false;
+    }
+};
+
+// Utilitaires
+const scrollToBottom = async () => {
+    await nextTick();
+    const chatContainer = document.querySelector(".chat-container");
+    if (chatContainer) {
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+    }
+};
+
+// Ajoutez cette fonction pour formater la date
+const formatDate = (dateString) => {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "";
+    return date.toLocaleDateString("fr-FR", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
     });
 };
 
-// ✅ Observer les messages pour le scroll automatique
+// Ajout des refs pour les instructions personnalisées
+const showInstructionsModal = ref(false);
+const customInstruction = ref(
+    page.props.customInstruction || {
+        about_user: "",
+        preference: "",
+    }
+);
+
+// Fonction pour sauvegarder les instructions
+const saveInstructions = async () => {
+    try {
+        loading.value = true;
+        const response = await axios.post(route("custom-instructions.store"), {
+            about_user: customInstruction.value.about_user,
+            preference: customInstruction.value.preference,
+        });
+
+        if (response.data.instruction) {
+            customInstruction.value = response.data.instruction;
+            showInstructionsModal.value = false;
+            flashMessage.value = "Instructions personnalisées sauvegardées";
+        }
+    } catch (error) {
+        flashError.value = "Erreur lors de la sauvegarde des instructions";
+    } finally {
+        loading.value = false;
+    }
+};
+
+// Observers
 watch(
     messages,
     () => {
@@ -178,81 +274,113 @@ watch(
     { deep: true }
 );
 
-// ✅ Observer le modèle sélectionné
 watch(selectedModel, (newModel) => {
-    form.model = newModel;
+    if (newModel) {
+        form.model = newModel;
+    }
 });
+// Ajout d'un watcher sur le modèle pour sauvegarder le choix utilisateur et celui de la conversation (si sélectionnée)
+watch(
+    () => form.model,
+    async (newModel, oldModel) => {
+        if (newModel && newModel !== oldModel) {
+            try {
+                await axios.post(route("user.updateModel"), {
+                    model: newModel,
+                    conversation_id: selectedConversation.value?.id || null,
+                });
+            } catch (error) {
+                console.error("Erreur lors de la sauvegarde du modèle:", error);
+            }
+        }
+    }
+);
 </script>
 
 <template>
     <div class="h-screen w-screen flex bg-gray-900 text-white">
-        <!-- Sidebar -->
+        <!-- Sidebar avec scroll -->
         <aside
-            class="w-1/4 bg-gray-800 p-4 overflow-y-auto border-r border-gray-700"
+            class="w-1/4 bg-gray-800 p-4 flex flex-col border-r border-gray-700"
         >
             <h2 class="text-xl font-bold mb-4">Conversations</h2>
 
             <button
                 @click="createConversation"
-                class="w-full p-2 mb-4 bg-blue-500 text-white rounded hover:bg-blue-600 transition flex items-center justify-center"
+                class="p-2 mb-4 bg-blue-500 text-white rounded hover:bg-blue-600 transition flex items-center justify-center"
                 :disabled="loading"
             >
                 <span v-if="!loading">+ Nouvelle conversation</span>
                 <span v-else>Chargement...</span>
             </button>
 
-            <div class="space-y-2">
-                <div
-                    v-for="conversation in conversations"
-                    :key="conversation.id"
-                    class="cursor-pointer p-3 rounded-lg transition-colors duration-200"
-                    :class="{
-                        'bg-gray-700':
-                            selectedConversation?.id === conversation.id,
-                        'hover:bg-gray-700':
-                            selectedConversation?.id !== conversation.id,
-                    }"
-                >
+            <!-- Conteneur avec scroll pour la liste des conversations -->
+            <div class="flex-1 overflow-y-auto min-h-0">
+                <div v-if="conversations?.length" class="space-y-2">
                     <div
-                        class="flex justify-between items-center"
-                        @click="selectConversation(conversation)"
+                        v-for="conversation in conversations"
+                        :key="conversation?.id"
+                        class="cursor-pointer p-3 rounded-lg transition-colors duration-200"
+                        :class="{
+                            'bg-gray-700':
+                                selectedConversation?.id === conversation?.id,
+                            'hover:bg-gray-700':
+                                selectedConversation?.id !== conversation?.id,
+                        }"
                     >
-                        <div v-if="editingTitle === conversation.id">
-                            <input
-                                v-model="newTitle"
-                                @blur="updateConversationTitle(conversation)"
-                                @keyup.enter="
-                                    updateConversationTitle(conversation)
-                                "
-                                class="bg-gray-600 text-white px-2 py-1 rounded"
-                                ref="titleInput"
-                            />
-                        </div>
                         <div
-                            v-else
-                            class="font-medium"
-                            @dblclick="
-                                () => {
-                                    editingTitle = conversation.id;
-                                    newTitle = conversation.title;
-                                    $nextTick(() => {
-                                        $refs.titleInput?.focus();
-                                    });
-                                }
-                            "
+                            class="flex justify-between items-center"
+                            @click="selectConversation(conversation)"
                         >
-                            {{ conversation.title || "Nouvelle conversation" }}
-                        </div>
-                        <div class="text-sm text-gray-400">
-                            {{
-                                new Date(
-                                    conversation.last_activity
-                                ).toLocaleDateString("fr-FR")
-                            }}
+                            <div v-if="editingTitle === conversation?.id">
+                                <input
+                                    v-model="newTitle"
+                                    @blur="
+                                        updateConversationTitle(conversation)
+                                    "
+                                    @keyup.enter="
+                                        updateConversationTitle(conversation)
+                                    "
+                                    class="bg-gray-600 text-white px-2 py-1 rounded w-full"
+                                    ref="titleInput"
+                                />
+                            </div>
+                            <div
+                                v-else
+                                class="font-medium"
+                                @dblclick="
+                                    () => {
+                                        editingTitle = conversation?.id;
+                                        newTitle = conversation?.title || '';
+                                        $nextTick(() => {
+                                            $refs.titleInput?.focus();
+                                        });
+                                    }
+                                "
+                            >
+                                {{
+                                    conversation?.title ||
+                                    "Nouvelle conversation"
+                                }}
+                            </div>
+                            <div class="text-sm text-gray-400">
+                                {{ formatDate(conversation?.last_activity) }}
+                            </div>
                         </div>
                     </div>
                 </div>
+                <div v-else class="text-gray-400 text-center py-4">
+                    Aucune conversation
+                </div>
             </div>
+
+            <!-- Bouton instructions en bas fixe -->
+            <button
+                @click="showInstructionsModal = true"
+                class="w-full p-2 mt-4 bg-gray-700 text-white rounded hover:bg-gray-600 transition"
+            >
+                Instructions personnalisées
+            </button>
         </aside>
 
         <!-- Zone principale -->
@@ -266,13 +394,14 @@ watch(selectedModel, (newModel) => {
                     <select
                         v-model="form.model"
                         class="w-full p-2 border rounded bg-gray-700 text-white"
+                        :disabled="loading"
                     >
                         <option
                             v-for="model in models"
-                            :key="model.id"
-                            :value="model.id"
+                            :key="model?.id"
+                            :value="model?.id"
                         >
-                            {{ model.name }}
+                            {{ model?.name }}
                         </option>
                     </select>
                 </div>
@@ -285,41 +414,54 @@ watch(selectedModel, (newModel) => {
                 <div
                     class="chat-container flex-1 bg-gray-700 p-4 rounded-lg overflow-y-auto border mb-4"
                 >
-                    <div
-                        v-for="(msg, index) in messages"
-                        :key="index"
-                        class="mb-4 last:mb-0"
-                    >
+                    <div v-if="messages?.length">
                         <div
-                            class="flex"
-                            :class="
-                                msg.role === 'user'
-                                    ? 'justify-end'
-                                    : 'justify-start'
-                            "
+                            v-for="(msg, index) in messages"
+                            :key="index"
+                            class="mb-4 last:mb-0"
                         >
                             <div
-                                class="max-w-[80%] p-3 rounded-lg shadow-md"
+                                class="flex"
                                 :class="
-                                    msg.role === 'user'
-                                        ? 'bg-blue-500'
-                                        : 'bg-gray-600'
+                                    msg?.role === 'user'
+                                        ? 'justify-end'
+                                        : 'justify-start'
                                 "
                             >
-                                <strong
-                                    >{{
-                                        msg.role === "user"
-                                            ? "Vous"
-                                            : "Assistant"
-                                    }}:</strong
-                                >
                                 <div
-                                    class="mt-1 prose prose-invert max-w-none"
-                                    v-html="md.render(msg.content)"
-                                />
+                                    class="max-w-[80%] p-3 rounded-lg shadow-md"
+                                    :class="
+                                        msg?.role === 'user'
+                                            ? 'bg-blue-500'
+                                            : 'bg-gray-600'
+                                    "
+                                >
+                                    <strong
+                                        >{{
+                                            msg?.role === "user"
+                                                ? "Vous"
+                                                : "Assistant"
+                                        }}:</strong
+                                    >
+                                    <div
+                                        class="mt-1 prose prose-invert max-w-none"
+                                        v-html="md.render(msg?.content || '')"
+                                    />
+                                </div>
                             </div>
                         </div>
                     </div>
+                    <div v-else class="text-gray-400 text-center py-4">
+                        Commencez une conversation...
+                    </div>
+                </div>
+
+                <!-- Messages d'erreur -->
+                <div
+                    v-if="flashError"
+                    class="mb-4 p-3 bg-red-500 text-white rounded"
+                >
+                    {{ flashError }}
                 </div>
 
                 <!-- Formulaire -->
@@ -333,11 +475,11 @@ watch(selectedModel, (newModel) => {
                     />
                     <button
                         type="submit"
-                        class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition"
+                        class="bg-blue-500 text-white px-6 py-3 rounded-lg hover:bg-blue-600 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         :disabled="
                             loading ||
                             !selectedConversation ||
-                            !form.message.trim()
+                            !form.message?.trim()
                         "
                     >
                         {{ loading ? "Envoi..." : "Envoyer" }}
@@ -345,5 +487,57 @@ watch(selectedModel, (newModel) => {
                 </form>
             </div>
         </main>
+
+        <!-- Modal Instructions Personnalisées -->
+        <div
+            v-if="showInstructionsModal"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
+        >
+            <div class="bg-gray-800 rounded-lg p-6 max-w-2xl w-full">
+                <h2 class="text-xl font-bold mb-4">
+                    Instructions Personnalisées
+                </h2>
+
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">
+                            Que souhaitez-vous que l'IA sache à propos de vous ?
+                        </label>
+                        <textarea
+                            v-model="customInstruction.about_user"
+                            class="w-full h-32 bg-gray-700 rounded p-2"
+                            placeholder="Ex: Je suis développeur PHP avec 5 ans d'expérience..."
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2">
+                            Comment souhaitez-vous que l'IA vous réponde ?
+                        </label>
+                        <textarea
+                            v-model="customInstruction.preference"
+                            class="w-full h-32 bg-gray-700 rounded p-2"
+                            placeholder="Ex: Réponses concises avec des exemples de code..."
+                        />
+                    </div>
+                </div>
+
+                <div class="mt-6 flex justify-end space-x-3">
+                    <button
+                        @click="showInstructionsModal = false"
+                        class="px-4 py-2 bg-gray-600 rounded hover:bg-gray-500"
+                    >
+                        Annuler
+                    </button>
+                    <button
+                        @click="saveInstructions"
+                        class="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600"
+                        :disabled="loading"
+                    >
+                        {{ loading ? "Sauvegarde..." : "Sauvegarder" }}
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 </template>

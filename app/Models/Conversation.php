@@ -9,7 +9,20 @@ class Conversation extends Model
 {
     use HasFactory;
 
-    protected $fillable = ['user_id', 'title', 'model', 'is_temporary'];
+    protected $fillable = [
+        'user_id',
+        'title',
+        'model',
+        'is_temporary',
+        'last_activity', // Ajout de last_activity
+        'context'
+    ];
+
+    protected $casts = [
+        'last_activity' => 'datetime',
+        'created_at' => 'datetime',
+        'updated_at' => 'datetime'
+    ];
 
     /**
      * Une conversation appartient à un utilisateur
@@ -32,6 +45,6 @@ class Conversation extends Model
      */
     public function scopeRecent($query)
     {
-        return $query->orderBy('updated_at', 'desc');
+        return $query->orderBy('last_activity', 'desc');
     }
 }

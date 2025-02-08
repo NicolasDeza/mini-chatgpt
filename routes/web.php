@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AskController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\MessageController;
+use App\Http\Controllers\CustomInstructionController; // Ajout de cet import
 use Inertia\Inertia;
 
 // ===========================
@@ -52,5 +53,17 @@ Route::middleware([
     // ===========================
     Route::post('/chat/{conversation}/messages', [MessageController::class, 'store'])->name('messages.store'); // Envoyer un message
     Route::get('/chat/{conversation}/messages', [MessageController::class, 'index'])->name('messages.index'); // Lister les messages d'une conversation
+
+    // ===========================
+    // 👤 Routes User
+    // ===========================
+    Route::post('/user/update-model', [\App\Http\Controllers\UserController::class, 'updateModel'])->name('user.updateModel');
+
+    // ===========================
+    // 📋 Routes Custom Instructions
+    // ===========================
+    Route::get('/custom-instructions', [CustomInstructionController::class, 'index'])->name('custom-instructions.index');
+    Route::post('/custom-instructions', [CustomInstructionController::class, 'store'])->name('custom-instructions.store');
+    Route::put('/custom-instructions/{instruction}', [CustomInstructionController::class, 'update'])->name('custom-instructions.update');
 
 });

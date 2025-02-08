@@ -2,6 +2,7 @@
 namespace App\Http\Controllers;
 use App\Services\ChatService;
 use App\Models\Conversation;
+use App\Models\CustomInstruction; // Ajout de cet import
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
@@ -17,14 +18,19 @@ class ConversationController extends Controller
     public function index()
     {
         $conversations = Conversation::where('user_id', auth()->id())
-            ->orderBy('updated_at', 'desc')
+            ->orderBy('last_activity', 'desc')  // Tri par "last_activity"
             ->get();
+
+        $customInstruction = CustomInstruction::where('user_id', auth()->id())
+            ->where('is_active', true)
+            ->first();
 
         return Inertia::render('Ask/Index', [
             'conversations' => $conversations,
             'models' => $this->chatService->getModels(),
             'selectedModel' => $this->chatService::DEFAULT_MODEL,
             'messages' => [],
+            'customInstruction' => $customInstruction // Ajout des instructions personnalisées
         ]);
     }
 
@@ -34,15 +40,15 @@ class ConversationController extends Controller
             'user_id' => auth()->id(),
             'model' => $this->chatService::DEFAULT_MODEL,
             'is_temporary' => false,
-            'title' => 'Nouvelle conversation', // Titre par défaut
-            'last_activity' => now(),
+            'title' => 'Nouvelle conversation',
+            'last_activity' => now(), // S'assurer que cette date est bien définie
             'context' => json_encode([]),
         ]);
 
         return response()->json([
             'conversation' => $conversation,
             'conversations' => Conversation::where('user_id', auth()->id())
-                ->orderBy('updated_at', 'desc')
+                ->orderBy('last_activity', 'desc')
                 ->get()
         ]);
     }

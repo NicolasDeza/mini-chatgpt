@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use App\Models\CustomInstruction; // Ajout de cet import
 
 class ChatService
 {
@@ -118,12 +119,26 @@ class ChatService
         $user = auth()->user();
         $now = now()->locale('fr')->format('l d F Y H:i');
 
+        // Récupérer les instructions personnalisées actives
+        $customInstruction = CustomInstruction::where('user_id', $user->id)
+            ->where('is_active', true)
+            ->first();
+
+        $systemPrompt = "Tu es un assistant de chat. La date et l'heure actuelle est le {$now}.\n";
+        $systemPrompt .= "Tu es actuellement utilisé par {$user->name}.\n";
+
+        if ($customInstruction) {
+            if ($customInstruction->about_user) {
+                $systemPrompt .= "\nÀ propos de l'utilisateur:\n" . $customInstruction->about_user;
+            }
+            if ($customInstruction->preference) {
+                $systemPrompt .= "\nPréférences de réponse:\n" . $customInstruction->preference;
+            }
+        }
+
         return [
             'role' => 'system',
-            'content' => <<<EOT
-                Tu es un assistant de chat. La date et l'heure actuelle est le {$now}.
-                Tu es actuellement utilisé par {$user->name}.
-                EOT,
+            'content' => $systemPrompt,
         ];
     }
 }
