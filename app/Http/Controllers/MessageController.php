@@ -44,42 +44,76 @@ class MessageController extends Controller
     {
         $conversation = Conversation::findOrFail($conversationId);
 
-        // Sauvegarder le message de l'utilisateur
+        // Sauvegarder le message utilisateur
         Message::create([
             'conversation_id' => $conversationId,
             'role' => 'user',
             'content' => $request->message
         ]);
 
-        // Préparer le fil complet des messages
-        $messages = $conversation->messages()->orderBy('created_at', 'asc')->get()
+        // Préparer le fil des messages
+        $messages = $conversation->messages()
+            ->orderBy('created_at', 'asc')
+            ->get()
             ->map(fn($msg) => ['role' => $msg->role, 'content' => $msg->content])
             ->toArray();
 
+        // Obtenir la réponse de l'IA
         $aiResponse = $this->chatService->sendMessage(
             messages: $messages,
             model: $request->model ?? $conversation->model
         );
 
-        // Sauvegarder la réponse de l'IA
+        // Sauvegarder la réponse
         Message::create([
             'conversation_id' => $conversationId,
             'role' => 'assistant',
             'content' => $aiResponse
         ]);
 
-        // Génération automatique du titre dès la première réponse
-        if ($conversation->messages()->count() <= 2) {
-            $titlePrompt = "Génère un titre court et concis (maximum 5 mots) pour une conversation qui commence par ce message, sans guillemets ni ponctuation : " . $request->message;
-            $title = $this->chatService->sendMessage(
-                messages: [['role' => 'user', 'content' => $titlePrompt]],
-                model: $request->model ?? $conversation->model
-            );
-            $title = trim(str_replace(['"', "'", '.', '!', '?'], '', $title));
-            $conversation->update([
-                'title' => $title,
-                'last_activity' => now()
-            ]);
+        // Gestion améliorée du titre
+        $shouldGenerateTitle = $conversation->title === 'Nouvelle conversation' ||
+                              ($conversation->messages()->count() % 7 === 0); // Régénérer tous les 7 messages
+
+        if ($shouldGenerateTitle) {
+            try {
+                // Demander à l'IA de générer un titre basé sur les derniers messages
+                $contextMessages = $conversation->messages()
+                    ->orderBy('created_at', 'desc')
+                    ->take(3)
+                    ->get()
+                    ->map(fn($msg) => $msg->content)
+                    ->join("\n");
+
+                $titlePrompt = [
+                    [
+                        'role' => 'system',
+                        'content' => 'Génère un titre court et concis (maximum 50 caractères) qui résume cette conversation. Donne uniquement le titre, sans guillemets ni ponctuation.'
+                    ],
+                    [
+                        'role' => 'user',
+                        'content' => $contextMessages
+                    ]
+                ];
+
+                $title = $this->chatService->sendMessage(
+                    messages: $titlePrompt,
+                    model: $request->model ?? $conversation->model
+                );
+
+                // Nettoyer et limiter le titre
+                $title = \Str::limit(trim($title), 50);
+
+                $conversation->update([
+                    'title' => $title,
+                    'last_activity' => now()
+                ]);
+            } catch (\Exception $e) {
+                logger()->error('Erreur lors de la mise à jour du titre:', [
+                    'error' => $e->getMessage(),
+                    'conversation_id' => $conversationId
+                ]);
+            }
         } else {
             $conversation->update(['last_activity' => now()]);
         }

@@ -6,6 +6,7 @@ use App\Http\Controllers\AskController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\CustomInstructionController; // Ajout de cet import
+use App\Http\Controllers\CustomCommandController; // Ajout de cet import en haut du fichier
 use Inertia\Inertia;
 
 // ===========================
@@ -65,5 +66,11 @@ Route::middleware([
     Route::get('/custom-instructions', [CustomInstructionController::class, 'index'])->name('custom-instructions.index');
     Route::post('/custom-instructions', [CustomInstructionController::class, 'store'])->name('custom-instructions.store');
     Route::put('/custom-instructions/{instruction}', [CustomInstructionController::class, 'update'])->name('custom-instructions.update');
+
+    // ===========================
+    // 📋 Routes Custom Commands
+    // ===========================
+    Route::get('/custom-commands', [CustomCommandController::class, 'index'])->name('custom-commands.index');
+    Route::post('/custom-commands', [CustomCommandController::class, 'store'])->name('custom-commands.store');
 
 });

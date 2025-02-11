@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick, computed, toRaw } from "vue";
+import { ref, watch, nextTick, computed, toRaw, onMounted } from "vue";
 import { useForm, usePage } from "@inertiajs/vue3";
 import MarkdownIt from "markdown-it";
 import hljs from "highlight.js";
@@ -162,10 +162,12 @@ const sendMessage = async () => {
         });
         await scrollToBottom();
 
+        const processedMessage = await processMessage(tempMessage);
+
         const response = await axios.post(
             route("messages.store", selectedConversation.value.id),
             {
-                message: tempMessage,
+                message: processedMessage,
                 model: form.model,
             }
         );
@@ -230,8 +232,6 @@ const formatDate = (dateString) => {
         year: "numeric",
         month: "short",
         day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
     });
 };
 
@@ -295,6 +295,74 @@ watch(
         }
     }
 );
+
+const commands = ref([]);
+const showCommandsModal = ref(false);
+
+const newCommand = ref({
+    name: "",
+    command: "",
+    description: "",
+    prompt: "",
+});
+
+const saveCommand = async () => {
+    try {
+        loading.value = true;
+        const response = await axios.post(
+            route("custom-commands.store"),
+            newCommand.value
+        );
+        if (response.data.command) {
+            commands.value.push(response.data.command);
+            newCommand.value = {
+                name: "",
+                command: "",
+                description: "",
+                prompt: "",
+            };
+            flashMessage.value = "Commande personnalisée sauvegardée";
+        }
+    } catch (error) {
+        flashError.value = "Erreur lors de la sauvegarde de la commande";
+    } finally {
+        loading.value = false;
+    }
+};
+
+// Charger les commandes au démarrage
+const loadCommands = async () => {
+    try {
+        const response = await axios.get(route("custom-commands.index"));
+        commands.value = response.data.commands;
+    } catch (error) {
+        console.error("Erreur lors du chargement des commandes:", error);
+    }
+};
+
+// Vérifier si le message commence par une commande
+const processMessage = async (message) => {
+    if (message.startsWith("/")) {
+        const command = commands.value.find((cmd) =>
+            message.startsWith(cmd.command)
+        );
+
+        if (command) {
+            // Remplacer la commande par son prompt
+            return (
+                command.prompt +
+                " " +
+                message.slice(command.command.length).trim()
+            );
+        }
+    }
+    return message;
+};
+
+// Charger les commandes au montage du composant
+onMounted(() => {
+    loadCommands();
+});
 </script>
 
 <template>
@@ -380,6 +448,14 @@ watch(
                 class="w-full p-2 mt-4 bg-gray-700 text-white rounded hover:bg-gray-600 transition"
             >
                 Instructions personnalisées
+            </button>
+
+            <!-- Ajouter un bouton pour gérer les commandes -->
+            <button
+                @click="showCommandsModal = true"
+                class="w-full p-2 mt-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition"
+            >
+                Commandes personnalisées
             </button>
         </aside>
 
@@ -507,7 +583,7 @@ watch(
                             v-model="customInstruction.about_user"
                             class="w-full h-32 bg-gray-700 rounded p-2"
                             placeholder="Ex: Je suis développeur PHP avec 5 ans d'expérience..."
-                        />
+                        ></textarea>
                     </div>
 
                     <div>
@@ -518,7 +594,7 @@ watch(
                             v-model="customInstruction.preference"
                             class="w-full h-32 bg-gray-700 rounded p-2"
                             placeholder="Ex: Réponses concises avec des exemples de code..."
-                        />
+                        ></textarea>
                     </div>
                 </div>
 
@@ -535,6 +611,95 @@ watch(
                         :disabled="loading"
                     >
                         {{ loading ? "Sauvegarde..." : "Sauvegarder" }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Modal pour les commandes -->
+        <div
+            v-if="showCommandsModal"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4"
+        >
+            <div class="bg-gray-800 rounded-lg p-6 max-w-2xl w-full">
+                <h2 class="text-xl font-bold mb-4">Commandes Personnalisées</h2>
+
+                <!-- Liste des commandes existantes -->
+                <div class="mb-6 space-y-4">
+                    <div
+                        v-for="cmd in commands"
+                        :key="cmd.id"
+                        class="bg-gray-700 p-4 rounded"
+                    >
+                        <div class="font-bold">{{ cmd.name }}</div>
+                        <div class="text-gray-400">{{ cmd.command }}</div>
+                        <div class="text-sm">{{ cmd.description }}</div>
+                    </div>
+                </div>
+
+                <!-- Formulaire pour ajouter une nouvelle commande -->
+                <form @submit.prevent="saveCommand" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-2"
+                            >Nom de la commande</label
+                        >
+                        <input
+                            type="text"
+                            v-model="newCommand.name"
+                            class="w-full bg-gray-700 rounded p-2"
+                            placeholder="Ex: Météo"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2"
+                            >Commande (/)</label
+                        >
+                        <input
+                            type="text"
+                            v-model="newCommand.command"
+                            class="w-full bg-gray-700 rounded p-2"
+                            placeholder="Ex: /meteo"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2"
+                            >Description</label
+                        >
+                        <input
+                            type="text"
+                            v-model="newCommand.description"
+                            class="w-full bg-gray-700 rounded p-2"
+                            placeholder="Ex: Affiche la météo pour une ville"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2"
+                            >Prompt</label
+                        >
+                        <textarea
+                            v-model="newCommand.prompt"
+                            class="w-full h-32 bg-gray-700 rounded p-2"
+                            placeholder="Ex: Donne la météo pour la ville de"
+                        ></textarea>
+                    </div>
+                </form>
+
+                <div class="mt-6 flex justify-end space-x-3">
+                    <button
+                        @click="showCommandsModal = false"
+                        class="px-4 py-2 bg-gray-600 rounded hover:bg-gray-500"
+                    >
+                        Fermer
+                    </button>
+                    <button
+                        @click="saveCommand"
+                        class="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600"
+                        :disabled="loading"
+                    >
+                        Ajouter une commande
                     </button>
                 </div>
             </div>
