@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Message;
 use App\Models\Conversation;
+use App\Models\CustomInstruction;
 use App\Services\ChatService;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -44,6 +45,11 @@ class MessageController extends Controller
     {
         $conversation = Conversation::findOrFail($conversationId);
 
+        // Récupérer les instructions personnalisées
+        $customInstruction = CustomInstruction::where('user_id', auth()->id())
+            ->where('is_active', true)
+            ->first();
+
         // Sauvegarder le message utilisateur
         Message::create([
             'conversation_id' => $conversationId,
@@ -51,12 +57,34 @@ class MessageController extends Controller
             'content' => $request->message
         ]);
 
-        // Préparer le fil des messages
-        $messages = $conversation->messages()
-            ->orderBy('created_at', 'asc')
-            ->get()
-            ->map(fn($msg) => ['role' => $msg->role, 'content' => $msg->content])
-            ->toArray();
+        // Préparer le fil des messages avec les instructions système
+        $messages = [];
+
+        // Ajouter les instructions personnalisées si elles existent
+        if ($customInstruction) {
+            $systemMessage = "Instructions de l'utilisateur:\n";
+            if ($customInstruction->about_user) {
+                $systemMessage .= "À propos de l'utilisateur: " . $customInstruction->about_user . "\n";
+            }
+            if ($customInstruction->preference) {
+                $systemMessage .= "Préférences de réponse: " . $customInstruction->preference;
+            }
+
+            $messages[] = [
+                'role' => 'system',
+                'content' => $systemMessage
+            ];
+        }
+
+        // Ajouter l'historique des messages
+        $messages = array_merge(
+            $messages,
+            $conversation->messages()
+                ->orderBy('created_at', 'asc')
+                ->get()
+                ->map(fn($msg) => ['role' => $msg->role, 'content' => $msg->content])
+                ->toArray()
+        );
 
         // Obtenir la réponse de l'IA
         $aiResponse = $this->chatService->sendMessage(

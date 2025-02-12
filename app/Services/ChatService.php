@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
-use App\Models\CustomInstruction; // Ajout de cet import
+use Illuminate\Support\Facades\Log;
 
 class ChatService
 {
@@ -64,83 +64,83 @@ class ChatService
      */
     public function sendMessage(array $messages, string $model = null, float $temperature = 0.7): string
     {
-        try {
-            // Log des messages avant traitement
-            logger()->info('Messages reçus:', [
-                'messages_count' => count($messages),
-                'messages' => $messages
-            ]);
+        $maxRetries = 5; // Augmenté de 3 à 5
+        $attempt = 0;
+        $baseWaitTime = 5; // 5 secondes de base
 
-            logger()->info('Envoi du message', [
-                'model' => $model,
-                'temperature' => $temperature,
-            ]);
+        while ($attempt < $maxRetries) {
+            try {
+                // Ajouter un délai progressif entre les tentatives
+                if ($attempt > 0) {
+                    $waitTime = $baseWaitTime * $attempt;
+                    sleep($waitTime);
+                }
 
-            $models = collect($this->getModels());
-            if (!$model || !$models->contains('id', $model)) {
-                $model = self::DEFAULT_MODEL;
-                logger()->info('Modèle par défaut utilisé:', ['model' => $model]);
+                Log::info('Tentative d\'envoi du message', [
+                    'model' => $model ?? self::DEFAULT_MODEL,
+                    'attempt' => $attempt + 1,
+                    'waitTime' => $waitTime ?? 0
+                ]);
+
+                $response = Http::withHeaders([
+                    'Authorization' => 'Bearer ' . $this->apiKey,
+                    'HTTP-Referer' => 'https://mini-chatgpt.test',
+                    'X-Title' => 'Mini-ChatGPT'
+                 ])->timeout(30)->post($this->baseUrl . '/chat/completions', [
+                    'model' => $model ?? self::DEFAULT_MODEL,
+                    'messages' => $messages,
+                    'temperature' => $temperature
+                ]);
+
+                $data = $response->json();
+
+                if ($response->status() === 429) {
+                    $resetTime = $response->header('X-RateLimit-Reset');
+                    $waitTime = $resetTime ? (int) ($resetTime - time()) : 30;
+
+                    Log::warning('Rate limit atteint', [
+                        'reset_time' => $resetTime,
+                        'wait_time' => $waitTime
+                    ]);
+
+                    if ($attempt < $maxRetries - 1) {
+                        $attempt++;
+                        sleep(min($waitTime, 30)); // Attendre max 30 secondes
+                        continue;
+                    }
+                }
+
+                if (!$response->successful()) {
+                    throw new \Exception('Erreur API: ' . $response->body());
+                }
+
+                // Vérification plus détaillée de la réponse
+                if (isset($data['error'])) {
+                    throw new \Exception('Erreur API: ' . ($data['error']['message'] ?? 'Erreur inconnue'));
+                }
+
+                if (!isset($data['choices'][0]['message']['content'])) {
+                    throw new \Exception('Format de réponse API invalide');
+                }
+
+                return $data['choices'][0]['message']['content'];
+
+            } catch (\Exception $e) {
+                Log::error('Erreur API Chat', [
+                    'error' => $e->getMessage(),
+                    'messages' => $messages,
+                    'attempt' => $attempt + 1
+                ]);
+
+                if ($attempt >= $maxRetries - 1) {
+                    throw new \Exception('Erreur lors de la communication avec l\'API : ' . $e->getMessage());
+                }
+
+                $attempt++;
             }
-
-            // Log du système prompt
-            $systemPrompt = $this->getChatSystemPrompt();
-            logger()->info('System Prompt:', ['prompt' => $systemPrompt]);
-
-            // Log de tous les messages combinés
-            $allMessages = [$systemPrompt, ...$messages];
-            logger()->info('Messages combinés:', [
-                'total_messages' => count($allMessages),
-                'all_messages' => $allMessages
-            ]);
-
-            $response = $this->client->chat()->create([
-                'model' => $model,
-                'messages' => $allMessages,
-                'temperature' => $temperature,
-            ]);
-
-            // Log de la réponse complète
-            logger()->info('Réponse API complète:', ['response' => $response]);
-
-            // Vérification plus détaillée de la structure de réponse
-            if (!is_object($response)) {
-                throw new \Exception("La réponse de l'API n'est pas un objet valide");
-            }
-
-            if (!isset($response->choices) || !is_array($response->choices) || empty($response->choices)) {
-                throw new \Exception("La réponse de l'API ne contient pas de choix valides");
-            }
-
-            if (!isset($response->choices[0]->message->content)) {
-                throw new \Exception("Le format de la réponse de l'API est invalide");
-            }
-
-            $content = $response->choices[0]->message->content;
-            logger()->info('Contenu de la réponse:', ['content' => $content]);
-
-            return $content;
-        } catch (\Exception $e) {
-            // Log détaillé de l'erreur
-            logger()->error('Erreur détaillée dans sendMessage:', [
-                'error_message' => $e->getMessage(),
-                'error_code' => $e->getCode(),
-                'error_trace' => $e->getTraceAsString(),
-                'last_messages' => $messages ?? [],
-                'model' => $model,
-                'temperature' => $temperature
-            ]);
-
-            if ($e->getMessage() === 'Undefined array key "choices"') {
-                throw new \Exception("Limite de messages atteinte");
-            }
-
-            logger()->error('Erreur dans sendMessage:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
-            throw $e;
         }
+
+        throw new \Exception('Nombre maximum de tentatives atteint');
     }
 
     private function createOpenAIClient(): \OpenAI\Client
